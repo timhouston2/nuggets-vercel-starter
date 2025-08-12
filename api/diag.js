@@ -10,11 +10,22 @@ export default async function handler(req, res) {
     const vid = parseYouTubeId(url);
     if (!vid) return res.status(400).json({ ok: false, step: "parse", error: "invalid_youtube_url" });
 
-    const hasKey = !!process.env.OPENAI_API_KEY;
-    if (!hasKey) return res.status(500).json({ ok: false, step: "key", error: "missing_openai_key" });
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(500).json({ ok: false, step: "key", error: "missing_openai_key" });
+    }
 
     const t0 = Date.now();
-    const { text } = await fetchYouTubeTranscript(vid);
+    let text = "";
+    try {
+      const r = await fetchYouTubeTranscript(vid);
+      text = r.text;
+    } catch (e) {
+      return res.status(500).json({
+        ok: false,
+        step: "transcript",
+        error: String(e?.message || e)
+      });
+    }
     const ms = Date.now() - t0;
 
     return res.status(200).json({
@@ -26,10 +37,6 @@ export default async function handler(req, res) {
       preview: text?.slice(0, 200) || ""
     });
   } catch (e) {
-    return res.status(500).json({
-      ok: false,
-      step: "exception",
-      error: e?.message || String(e)
-    });
+    return res.status(500).json({ ok: false, step: "exception", error: String(e?.message || e) });
   }
 }
