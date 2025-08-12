@@ -1,42 +1,15 @@
-export const config = { runtime: "nodejs" };
-
-import { parseYouTubeId, fetchYouTubeTranscript } from "./_lib/transcript.js";
-
-export default async function handler(req, res) {
-  try {
-    const url = req.query?.url || req.body?.url || "";
-    if (!url) return res.status(400).json({ ok: false, step: "input", error: "missing_url" });
-
-    const vid = parseYouTubeId(url);
-    if (!vid) return res.status(400).json({ ok: false, step: "parse", error: "invalid_youtube_url" });
-
-    if (!process.env.OPENAI_API_KEY) {
-      return res.status(500).json({ ok: false, step: "key", error: "missing_openai_key" });
-    }
-
-    const t0 = Date.now();
-    let text = "";
-    try {
-      const r = await fetchYouTubeTranscript(vid);
-      text = r.text;
-    } catch (e) {
-      return res.status(500).json({
-        ok: false,
-        step: "transcript",
-        error: String(e?.message || e)
-      });
-    }
-    const ms = Date.now() - t0;
-
-    return res.status(200).json({
-      ok: true,
-      step: "done",
-      videoId: vid,
-      durationMs: ms,
-      transcriptChars: text?.length ?? 0,
-      preview: text?.slice(0, 200) || ""
-    });
-  } catch (e) {
-    return res.status(500).json({ ok: false, step: "exception", error: String(e?.message || e) });
-  }
+{
+  "version": 2,
+  "functions": {
+    "api/**/*.js": { "runtime": "nodejs20.x", "maxDuration": 60, "memory": 1024 }
+  },
+  "builds": [
+    { "src": "package.json", "use": "@vercel/static-build", "config": { "distDir": "dist" } },
+    { "src": "api/**/*.js", "use": "@vercel/node" }
+  ],
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/api/$1" },
+    { "handle": "filesystem" },
+    { "src": "/.*", "dest": "/index.html" }
+  ]
 }
