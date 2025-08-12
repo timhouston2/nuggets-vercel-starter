@@ -48,23 +48,21 @@ ${transcript.slice(0, 100000)}
   let takeaways = [];
   let quotes = [];
 
-  // Try to grab sections by headings
   const parseBullets = (block) => (block.match(/^-\\s+.*$/gmi) || [])
-    .map(s => s.replace(/^[-•]\\s+/, "").trim());
+    .map(s => s.replace(/^[\\-•]\\s+/, "").trim());
 
   narrative = scrub(text.split(/\n\s*\d\)\s*/i)[0] || text);
 
-  const execMatch = text.match(/Executive Summary[\s\S]*?(Actionable Insights|Strategic Takeaways|Important Quotes|$)/i);
+  const execMatch = text.match(/Executive Summary[\\s\\S]*?(Actionable Insights|Strategic Takeaways|Important Quotes|$)/i);
   if (execMatch) exec = parseBullets(execMatch[0]);
 
-  const insMatch = text.match(/Actionable Insights[\s\S]*?(Strategic Takeaways|Important Quotes|$)/i);
+  const insMatch = text.match(/Actionable Insights[\\s\\S]*?(Strategic Takeaways|Important Quotes|$)/i);
   if (insMatch) insights = parseBullets(insMatch[0]);
 
-  const stratMatch = text.match(/Strategic Takeaways[\s\S]*?(Important Quotes|$)/i);
+  const stratMatch = text.match(/Strategic Takeaways[\\s\\S]*?(Important Quotes|$)/i);
   if (stratMatch) takeaways = parseBullets(stratMatch[0]);
 
-  // Extract JSON quotes if present
-  const jsonMatch = text.match(/```json[\s\S]*?```/i) || text.match(/\n\s*(\[\s*{[\s\S]*}\s*])\s*/);
+  const jsonMatch = text.match(/```json[\\s\\S]*?```/i) || text.match(/\n\s*(\[\s*{[\s\S]*}\s*])\s*/);
   if (jsonMatch) {
     try { quotes = JSON.parse(jsonMatch[0].replace(/```json|```/g, "").trim()); } catch {}
   }
