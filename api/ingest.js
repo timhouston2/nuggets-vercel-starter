@@ -1,3 +1,6 @@
+export const config = {
+  runtime: "nodejs"
+};
 import { parseYouTubeId, fetchYouTubeTranscript, ytDeepLink } from "./_lib/transcript.js";
 import { client } from "./_lib/openai.js";
 
