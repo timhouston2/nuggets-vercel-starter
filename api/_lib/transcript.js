@@ -3,7 +3,6 @@ import ytdl from "ytdl-core";
 import { client } from "./openai.js";
 import { toFile } from "openai";
 
-// Extract a YouTube video id from common URL formats
 export function parseYouTubeId(url) {
   try {
     const u = new URL(url);
@@ -18,8 +17,7 @@ export function ytDeepLink(videoId, startSec) {
   return `https://www.youtube.com/watch?v=${videoId}&t=${s}s`;
 }
 
-// --- Internal: download up to ~24MB of audio (enough for short episodes/tests)
-async function downloadAudioAsBuffer(videoId, maxBytes = 24 * 1024 * 1024) {
+async function downloadAudioAsBuffer(videoId, maxBytes = 12 * 1024 * 1024) {
   const url = `https://www.youtube.com/watch?v=${videoId}`;
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -28,8 +26,14 @@ async function downloadAudioAsBuffer(videoId, maxBytes = 24 * 1024 * 1024) {
     const stream = ytdl(url, {
       filter: "audioonly",
       quality: "highestaudio",
-      // higher water mark reduces backpressure stalls on serverless
-      highWaterMark: 1 << 20
+      highWaterMark: 1 << 20,
+      requestOptions: {
+        headers: {
+          "user-agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari",
+          "accept-language": "en-US,en;q=0.9"
+        }
+      }
     });
 
     stream.on("data", (chunk) => {
@@ -44,13 +48,11 @@ async function downloadAudioAsBuffer(videoId, maxBytes = 24 * 1024 * 1024) {
   });
 }
 
-// --- Internal: transcribe audio via OpenAI (gpt-4o-mini-transcribe -> whisper-1)
 async function transcribeAudioViaOpenAI(videoId) {
   const buf = await downloadAudioAsBuffer(videoId);
-  // ytdl usually gives webm/opus for audio-only; that’s fine for OpenAI
+  if (!buf || buf.length === 0) throw new Error("audio_download_empty");
   const file = await toFile(buf, "audio.webm", { contentType: "audio/webm" });
 
-  // Prefer the newer 4o-mini transcribe model; fall back to whisper-1
   try {
     const r1 = await client.audio.transcriptions.create({
       file,
@@ -58,7 +60,7 @@ async function transcribeAudioViaOpenAI(videoId) {
     });
     if (r1?.text) return r1.text;
   } catch (e) {
-    console.warn("[transcribe] 4o-mini-transcribe failed, falling back to whisper-1", e?.message);
+    console.warn("[transcribe] 4o-mini-transcribe failed:", e?.message);
   }
 
   const r2 = await client.audio.transcriptions.create({
@@ -68,13 +70,11 @@ async function transcribeAudioViaOpenAI(videoId) {
   return r2?.text || "";
 }
 
-// Public: try captions first, else full audio transcription
 export async function fetchYouTubeTranscript(videoId) {
-  // 1) Try official captions
+  // 1) Captions first
   try {
     const items = await YoutubeTranscript.fetchTranscript(videoId);
     const text = items.map((i) => i.text).join(" ");
-    // If captions exist but are trivial/too short, still fall back to audio
     if (text && text.length > 500) {
       const entries = items.map((i) => ({
         text: i.text,
@@ -83,11 +83,11 @@ export async function fetchYouTubeTranscript(videoId) {
       return { text, entries };
     }
   } catch (e) {
-    console.warn("[captions] fetch failed, will try audio transcription", e?.message);
+    console.warn("[captions] failed:", e?.message);
   }
 
-  // 2) Fallback: download audio + transcribe with OpenAI
+  // 2) Fallback: audio + OpenAI transcription
   const text = await transcribeAudioViaOpenAI(videoId);
-  if (!text) throw new Error("audio_transcription_failed");
+  if (!text || text.length < 50) throw new Error("audio_transcription_failed");
   return { text, entries: [] };
 }
