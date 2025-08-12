@@ -17,7 +17,8 @@ export function ytDeepLink(videoId, startSec) {
   return `https://www.youtube.com/watch?v=${videoId}&t=${s}s`;
 }
 
-async function downloadAudioAsBuffer(videoId, maxBytes = 12 * 1024 * 1024) {
+// Download up to ~10MB of audio to stay within serverless limits
+async function downloadAudioAsBuffer(videoId, maxBytes = 10 * 1024 * 1024) {
   const url = `https://www.youtube.com/watch?v=${videoId}`;
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -40,7 +41,7 @@ async function downloadAudioAsBuffer(videoId, maxBytes = 12 * 1024 * 1024) {
       total += chunk.length;
       chunks.push(chunk);
       if (total > maxBytes) {
-        stream.destroy(new Error("max_bytes_exceeded"));
+        stream.destroy(new Error("audio_max_bytes_exceeded"));
       }
     });
     stream.on("end", () => resolve(Buffer.concat(chunks, total)));
@@ -48,46 +49,18 @@ async function downloadAudioAsBuffer(videoId, maxBytes = 12 * 1024 * 1024) {
   });
 }
 
-async function transcribeAudioViaOpenAI(videoId) {
-  const buf = await downloadAudioAsBuffer(videoId);
-  if (!buf || buf.length === 0) throw new Error("audio_download_empty");
-  const file = await toFile(buf, "audio.webm", { contentType: "audio/webm" });
-
+// Stable transcription with whisper-1
+async function transcribeAudio(videoId) {
+  let buf;
   try {
-    const r1 = await client.audio.transcriptions.create({
-      file,
-      model: "gpt-4o-mini-transcribe"
-    });
-    if (r1?.text) return r1.text;
+    buf = await downloadAudioAsBuffer(videoId);
   } catch (e) {
-    console.warn("[transcribe] 4o-mini-transcribe failed:", e?.message);
+    throw new Error(`audio_download_failed:${e?.message || e}`);
+  }
+  if (!buf || buf.length === 0) {
+    throw new Error("audio_download_empty");
   }
 
-  const r2 = await client.audio.transcriptions.create({
-    file,
-    model: "whisper-1"
-  });
-  return r2?.text || "";
-}
-
-export async function fetchYouTubeTranscript(videoId) {
-  // 1) Captions first
+  let text = "";
   try {
-    const items = await YoutubeTranscript.fetchTranscript(videoId);
-    const text = items.map((i) => i.text).join(" ");
-    if (text && text.length > 500) {
-      const entries = items.map((i) => ({
-        text: i.text,
-        start: Math.round(i.offset || i.start || 0)
-      }));
-      return { text, entries };
-    }
-  } catch (e) {
-    console.warn("[captions] failed:", e?.message);
-  }
-
-  // 2) Fallback: audio + OpenAI transcription
-  const text = await transcribeAudioViaOpenAI(videoId);
-  if (!text || text.length < 50) throw new Error("audio_transcription_failed");
-  return { text, entries: [] };
-}
+    const file = await to
