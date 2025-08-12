@@ -1,67 +1,72 @@
-export const config = {
-  runtime: "nodejs"
-};
+export const config = { runtime: "nodejs" };
+
 import { parseYouTubeId, fetchYouTubeTranscript, ytDeepLink } from "./_lib/transcript.js";
-import { client } from "./_lib/openai.js";
+import { client, generateSummary } from "./_lib/openai.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "method_not_allowed" });
 
-  console.log("DEBUG: Incoming request", req.body);
-
-  // 1. Check API key
-  if (!process.env.OPENAI_API_KEY) {
-    console.error("DEBUG: Missing OPENAI_API_KEY");
-    return res.status(500).json({ error: "missing_openai_key" });
-  }
-
-  // 2. Parse YouTube URL
-  const url = req.body?.url || "";
-  const vid = parseYouTubeId(url);
-  if (!vid) {
-    console.error("DEBUG: Invalid or missing YouTube URL");
-    return res.status(400).json({ error: "invalid_url" });
-  }
-  console.log("DEBUG: Parsed video ID", vid);
-
-  // 3. Fetch transcript
-  let transcriptData;
   try {
-    transcriptData = await fetchYouTubeTranscript(vid);
-  } catch (err) {
-    console.error("DEBUG: Transcript fetch error", err);
-    return res.status(500).json({ error: "transcript_fetch_failed", details: err.message });
-  }
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(500).json({ error: "missing_openai_key" });
+    }
 
-  if (!transcriptData?.text || transcriptData.text.length < 100) {
-    console.error("DEBUG: No transcript found or too short");
-    return res.status(422).json({ error: "no_transcript" });
-  }
-  console.log("DEBUG: Transcript length", transcriptData.text.length);
+    const url = req.body?.url || "";
+    const vid = parseYouTubeId(url);
+    if (!vid) return res.status(400).json({ error: "invalid_youtube_url" });
 
-  // 4. Call OpenAI for short test
-  let testSummary;
-  try {
-    const r = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: "Summarize this YouTube transcript in 50 words or less." },
-        { role: "user", content: transcriptData.text.slice(0, 2000) }
-      ],
-      max_tokens: 200
-    });
-    testSummary = r.choices[0]?.message?.content || "";
-    console.log("DEBUG: Got OpenAI summary");
-  } catch (err) {
-    console.error("DEBUG: OpenAI API error", err);
-    return res.status(500).json({ error: "openai_error", details: err.message });
-  }
+    // Get transcript (captions or whisper fallback)
+    let transcriptText = "";
+    try {
+      const { text } = await fetchYouTubeTranscript(vid);
+      transcriptText = text;
+    } catch (e) {
+      // Surface the exact reason
+      return res.status(500).json({ error: "transcript_error", detail: String(e?.message || e) });
+    }
 
-  // 5. Return test JSON
-  return res.status(200).json({
-    status: "success",
-    videoId: vid,
-    transcriptPreview: transcriptData.text.slice(0, 120) + "...",
-    testSummary
-  });
+    if (!transcriptText || transcriptText.length < 200) {
+      return res.status(422).json({ error: "transcript_too_short" });
+    }
+
+    // Build the real summary
+    const meta = { podcastTitle: "YouTube", episodeTitle: `Video ${vid}` };
+    let out;
+    try {
+      out = await generateSummary({ transcript: transcriptText, ...meta });
+    } catch (e) {
+      return res.status(500).json({ error: "openai_summary_failed", detail: String(e?.message || e) });
+    }
+
+    const quotes = (out.quotes || []).map(q => ({
+      text: q.text,
+      speaker: q.speaker || "Speaker",
+      tStartSec: q.startSec || q.start || 0,
+      deepLinkUrl: ytDeepLink(vid, q.startSec || q.start || 0),
+      tweetIntentUrl:
+        `https://twitter.com/intent/tweet?` +
+        new URLSearchParams({ text: `${q.text} — ${q.speaker || "Speaker"}`, url })
+    }));
+
+    const slug = `/youtube/yt-${vid}`;
+    const resp = {
+      id: `yt-${vid}`,
+      slug,
+      status: "published",
+      episodeTitle: meta.episodeTitle,
+      podcastTitle: meta.podcastTitle,
+      narrative: out.narrative,
+      execSummary: (out.exec || []).map(b => `• ${b}`).join("\n"),
+      actionableInsights: out.insights || [],
+      strategicTakeaways: out.takeaways || [],
+      importantQuotes: quotes,
+      pdfUrl: "",
+      audioSummaryUrl: "",
+      metaDescription: "2-page summary with quotes, insights, and takeaways."
+    };
+
+    return res.status(200).json({ id: resp.id, slug, status: "published", summary: resp });
+  } catch (e) {
+    return res.status(500).json({ error: "server_error", detail: String(e?.message || e) });
+  }
 }
